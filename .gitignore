@@ -1,0 +1,20 @@
+# Python caches and test results
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments and tooling
+.venv/
+.uv/
+
+# Build artifacts
+/build/
+/dist/
+*.egg-info/
+
+# Generated example files (existing tracked examples remain tracked)
+/examples/output/
+

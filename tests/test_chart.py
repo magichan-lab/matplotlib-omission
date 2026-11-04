@@ -11,9 +11,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path
 
 from matplotlib_omission import BrokenBarChart, broken_bar, broken_barh
-from matplotlib_omission._marks import BreakMarks
+from matplotlib_omission._marks import BarSlashClip, BreakMarks
 
 
 @pytest.fixture(autouse=True)
@@ -151,6 +153,63 @@ class TestBrokenBar:
         boundaries = [slash[:, value].mean() for slash in slashes]
         assert boundaries.count(pytest.approx(chart.ax.patch.bands[0][1])) == 2
         assert boundaries.count(pytest.approx(chart.ax.patch.bands[1][0])) == 1
+
+    @pytest.mark.parametrize("orientation", ["vertical", "horizontal"])
+    @pytest.mark.parametrize("bar_before_chart", [False, True])
+    def test_bar_slash_fill_follows_slanted_boundary(self, orientation, bar_before_chart):
+        """棒の作成順によらず塗りが斜線に沿って切り抜かれる。"""
+        if bar_before_chart:
+            figure, ax = plt.subplots(figsize=(8, 5))
+            bar = (ax.bar if orientation == "vertical" else ax.barh)([0], [16], color="red")
+            chart = BrokenBarChart(
+                [(0, 4), (14, 18)], orientation=orientation, break_style="bar_slash", ax=ax
+            )
+        else:
+            chart = BrokenBarChart(
+                [(0, 4), (14, 18)],
+                orientation=orientation,
+                break_style="bar_slash",
+                figsize=(8, 5),
+            )
+            bar = (chart.bar if orientation == "vertical" else chart.barh)([0], [16], color="red")[
+                0
+            ]
+        chart.figure.set_dpi(180)
+        chart.figure.canvas.draw()
+        assert isinstance(bar.patches[0].get_clip_path()._patch, BarSlashClip)
+
+        marks = next(artist for artist in chart.ax.artists if isinstance(artist, BreakMarks))
+        dx = chart.figure.dpi / 72 * 4 / chart.ax.bbox.width
+        dy = chart.figure.dpi / 72 * 4 / chart.ax.bbox.height
+        line = marks._bar_slashes(dx, dy)[0]
+        category = 0 if orientation == "vertical" else 1
+        value = 1 - category
+        flat = chart.ax.patch.bands[0][1]
+        output = io.BytesIO()
+        chart.savefig(output, format="png", transparent=True, dpi=180)
+        output.seek(0)
+        pixels = plt.imread(output)
+        for fraction, filled in ((0.1, False), (0.9, True)):
+            along = line[0, category] + fraction * (line[1, category] - line[0, category])
+            edge = line[0, value] + fraction * (line[1, value] - line[0, value])
+            midpoint = (edge + flat) / 2
+            point = (along, midpoint) if orientation == "vertical" else (midpoint, along)
+            x, y = chart.ax.transAxes.transform(point)
+            pixel = pixels[pixels.shape[0] - 1 - int(y), int(x)]
+            if filled:
+                assert pixel[0] > 0.9 and pixel[1] < 0.1 and pixel[3] > 0.9
+            else:
+                assert pixel[3] == 0
+
+    def test_bar_slash_preserves_explicit_bar_clip_path(self):
+        """棒に明示的に設定したクリップパスを上書きしない。"""
+        figure, ax = plt.subplots()
+        bar = ax.bar([0], [16])[0]
+        clip = PathPatch(Path.unit_rectangle(), transform=ax.transAxes)
+        bar.set_clip_path(clip)
+        BrokenBarChart([(0, 4), (14, 18)], ax=ax, break_style="bar_slash")
+        figure.canvas.draw()
+        assert bar.get_clip_path()._patch is clip
 
     def test_grouped_stacked_negative_and_multiple_breaks(self):
         """複数の省略区間とグループ化、積み上げ、負の値を確認する。"""

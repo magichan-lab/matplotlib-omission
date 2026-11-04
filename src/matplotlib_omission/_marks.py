@@ -10,6 +10,37 @@ from matplotlib.patches import PathPatch
 from matplotlib.path import Path
 
 
+def _bar_geometry(ax, bar, orientation):
+    """棒の値方向の範囲とカテゴリ方向の Axes 座標を返す。"""
+    x0, x1 = sorted((bar.get_x(), bar.get_x() + bar.get_width()))
+    y0, y1 = sorted((bar.get_y(), bar.get_y() + bar.get_height()))
+    vertical = orientation == "vertical"
+    value_low, value_high = (y0, y1) if vertical else (x0, x1)
+    along_low, along_high = (x0, x1) if vertical else (y0, y1)
+    limits = ax.get_ylim() if vertical else ax.get_xlim()
+    if vertical:
+        points = ((along_low, limits[0]), (along_high, limits[0]))
+        a, b = ax.transAxes.inverted().transform(ax.transData.transform(points))[:, 0]
+    else:
+        points = ((limits[0], along_low), (limits[0], along_high))
+        a, b = ax.transAxes.inverted().transform(ax.transData.transform(points))[:, 1]
+    return value_low, value_high, *sorted((a, b))
+
+
+def _slash_path(orientation, a, b, boundary, dx, dy):
+    """棒の切断辺に描く斜線を Axes 座標で返す。"""
+    if orientation == "vertical":
+        return np.array([[a - dx / 2, boundary - dy], [b + dx / 2, boundary + dy]])
+    return np.array([[boundary - dx, a - dy / 2], [boundary + dx, b + dy / 2]])
+
+
+def _slash_values(path, orientation, a, b):
+    """斜線と棒の両側面が交わる値方向の座標を返す。"""
+    along = 0 if orientation == "vertical" else 1
+    value = 1 - along
+    return np.interp((a, b), path[:, along], path[:, value])
+
+
 class OmissionPatch(PathPatch):
     """表示区間だけを含む背景兼クリップパス。
 
@@ -17,11 +48,12 @@ class OmissionPatch(PathPatch):
     波形の寸法はポイント単位で保持し、図のサイズやDPIの変更時に更新する。
     """
 
-    def __init__(self, ax, orientation, bands, style, amplitude, wavelength):
+    def __init__(self, ax, orientation, bands, ranges, style, amplitude, wavelength):
         """描画領域と正規化済みの表示区間からクリップパスを作る。"""
         self.owner = ax
         self.orientation = orientation
         self.bands = tuple(bands)
+        self.ranges = ranges
         self.style = style
         self.amplitude = amplitude
         self.wavelength = wavelength
@@ -35,6 +67,23 @@ class OmissionPatch(PathPatch):
         図のサイズまたはDPIが変わった場合はパスと境界座標を再計算する。
         """
         ax = self.owner
+        if self.style == "bar_slash":
+            for container in ax.containers:
+                if not isinstance(container, BarContainer):
+                    continue
+                for bar in container.patches:
+                    if not bar.get_clip_on():
+                        continue
+                    clip = getattr(bar, "_omission_slash_clip", None)
+                    current = bar.get_clip_path()
+                    current_patch = getattr(current, "_patch", None)
+                    if current is not None and current_patch not in (self, clip):
+                        continue
+                    if clip is None:
+                        clip = BarSlashClip(ax, bar, self)
+                        bar._omission_slash_clip = clip
+                    if current_patch is not clip:
+                        bar.set_clip_path(clip)
         key = (ax.bbox.width, ax.bbox.height, ax.figure.dpi)
         if key != self._geometry_key:
             self._geometry_key = key
@@ -76,6 +125,48 @@ class OmissionPatch(PathPatch):
                 codes.append(segment_codes)
             self.set_path(Path(np.vstack(vertices), np.concatenate(codes)))
         return super().get_path()
+
+
+class BarSlashClip(PathPatch):
+    """棒の塗りを斜めの切断辺に沿って切り抜くクリップパス。"""
+
+    def __init__(self, ax, bar, patch):
+        """描画領域、棒、省略区間の情報を保持する。"""
+        self.owner = ax
+        self.bar = bar
+        self.omission_patch = patch
+        super().__init__(Path.unit_rectangle(), transform=ax.transAxes)
+
+    def get_path(self):
+        """現在の棒の位置と描画サイズから斜めの境界パスを返す。"""
+        ax = self.owner
+        omission = self.omission_patch
+        orientation = omission.orientation
+        value_low, value_high, a, b = _bar_geometry(ax, self.bar, orientation)
+        dx = ax.figure.dpi / 72 * 4 / max(ax.bbox.width, 1)
+        dy = ax.figure.dpi / 72 * 4 / max(ax.bbox.height, 1)
+        vertices, codes = [], []
+        for i, (low, high) in enumerate(omission.bands):
+            lower = np.array([low, low])
+            upper = np.array([high, high])
+            if i and value_low < omission.ranges[i][0] < value_high:
+                line = _slash_path(orientation, a, b, low, dx, dy)
+                lower = _slash_values(line, orientation, a, b)
+            if i < len(omission.bands) - 1 and value_low < omission.ranges[i][1] < value_high:
+                line = _slash_path(orientation, a, b, high, dx, dy)
+                upper = _slash_values(line, orientation, a, b)
+            if orientation == "vertical":
+                polygon = np.array(
+                    [[a, lower[0]], [b, lower[1]], [b, upper[1]], [a, upper[0]], [a, lower[0]]]
+                )
+            else:
+                polygon = np.array(
+                    [[lower[0], a], [lower[1], b], [upper[1], b], [upper[0], a], [lower[0], a]]
+                )
+            polygon_codes = [Path.MOVETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]
+            vertices.append(polygon)
+            codes.extend(polygon_codes)
+        return Path(np.vstack(vertices), codes)
 
 
 class BreakMarks(Artist):
@@ -151,8 +242,6 @@ class BreakMarks(Artist):
         各棒がまたぐ境界だけに斜線を作る。
         """
         ax = self.owner
-        vertical = self.orientation == "vertical"
-        limits = ax.get_ylim() if vertical else ax.get_xlim()
         paths = []
         for container in ax.containers:
             if not isinstance(container, BarContainer):
@@ -160,42 +249,12 @@ class BreakMarks(Artist):
             for bar in container.patches:
                 if not bar.get_visible():
                     continue
-                x0, x1 = sorted((bar.get_x(), bar.get_x() + bar.get_width()))
-                y0, y1 = sorted((bar.get_y(), bar.get_y() + bar.get_height()))
-                value_low, value_high = (y0, y1) if vertical else (x0, x1)
-                along_low, along_high = (x0, x1) if vertical else (y0, y1)
-                if value_low == value_high or along_low == along_high:
+                value_low, value_high, a, b = _bar_geometry(ax, bar, self.orientation)
+                if value_low == value_high or a == b:
                     continue
-                # カテゴリ方向の座標をAxes比率に変換する。
-                if vertical:
-                    a = ax.transAxes.inverted().transform(
-                        ax.transData.transform((along_low, limits[0]))
-                    )[0]
-                    b = ax.transAxes.inverted().transform(
-                        ax.transData.transform((along_high, limits[0]))
-                    )[0]
-                else:
-                    a = ax.transAxes.inverted().transform(
-                        ax.transData.transform((limits[0], along_low))
-                    )[1]
-                    b = ax.transAxes.inverted().transform(
-                        ax.transData.transform((limits[0], along_high))
-                    )[1]
-                a, b = sorted((a, b))
                 for i, (left, right) in enumerate(zip(self.patch.bands, self.patch.bands[1:])):
                     edges = ((left[1], self.ranges[i][1]), (right[0], self.ranges[i + 1][0]))
                     for boundary, value in edges:
                         if value_low < value < value_high:
-                            if vertical:
-                                paths.append(
-                                    np.array(
-                                        [[a - dx / 2, boundary - dy], [b + dx / 2, boundary + dy]]
-                                    )
-                                )
-                            else:
-                                paths.append(
-                                    np.array(
-                                        [[boundary - dx, a - dy / 2], [boundary + dx, b + dy / 2]]
-                                    )
-                                )
+                            paths.append(_slash_path(self.orientation, a, b, boundary, dx, dy))
         return paths

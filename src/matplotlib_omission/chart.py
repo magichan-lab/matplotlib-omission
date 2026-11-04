@@ -174,7 +174,9 @@ class BrokenBarChart:
         value_axis.set_major_locator(FixedLocator(sorted(set(ticks))))
         value_axis.set_major_formatter(ScalarFormatter(useOffset=False))
         if n > 1:
-            patch = OmissionPatch(self.ax, orientation, bands, break_style, amplitude, wavelength)
+            patch = OmissionPatch(
+                self.ax, orientation, bands, self.ranges, break_style, amplitude, wavelength
+            )
             patch.set_facecolor(self.ax.patch.get_facecolor())
             patch.set_edgecolor("none")
             patch.set_figure(self.figure)

@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import matplotlib_omission
-from matplotlib_omission._marks import OmissionPatch
+from matplotlib_omission._marks import BarSlashClip, OmissionPatch
 
 
 @pytest.fixture(autouse=True)
@@ -96,3 +96,15 @@ def test_step_without_omission_uses_regular_axes():
     np.testing.assert_allclose(ax.get_yticks(), [0, 1, 2, 3, 4, 5])
     assert not isinstance(ax.patch, OmissionPatch)
     fig.canvas.draw()
+
+
+def test_enabled_bar_slash_clips_bars_added_before_and_after_limits():
+    """統合形式でも設定前後に描いた棒の塗りを斜めに切り抜く。"""
+    matplotlib_omission.enable()
+    fig, ax = plt.subplots()
+    first = ax.bar([0], [16], color="red")
+    ax.set_ylim(0, 18, omit=(4, 14), break_style="bar_slash")
+    second = ax.bar([1], [17], color="blue")
+    fig.canvas.draw()
+    for bar in (*first.patches, *second.patches):
+        assert isinstance(bar.get_clip_path()._patch, BarSlashClip)

@@ -15,7 +15,7 @@ ax.bar(
     color="#5b9bd5",
     width=0.55,
 )
-ax.set_ylim([(0, 4_500_000), (13_500_000, 16_500_000)])
+ax.set_ylim(0, 16_500_000, step=1_500_000, omit=(4_500_000, 13_500_000))
 ax.set_title("Sales")
 ax.grid(axis="y", color="0.85")
 fig.savefig("vertical.png", dpi=160, bbox_inches="tight")

@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from matplotlib_omission import BrokenBarChart, broken_bar, broken_barh
+from matplotlib_omission._marks import BreakMarks
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +134,23 @@ class TestBrokenBar:
             ax = chart.ax
             amplitude = np.ptp(ax.patch.boundaries[0, "high"][:, 1]) * ax.bbox.height / dpi * 72
             assert amplitude == pytest.approx(3, abs=0.02)
+
+    @pytest.mark.parametrize("orientation", ["vertical", "horizontal"])
+    def test_bar_slash_marks_only_bars_crossing_break(self, orientation):
+        """棒に付く斜線は、その棒がまたぐ省略境界だけに描く。"""
+        chart = BrokenBarChart([(0, 4), (14, 18)], orientation=orientation, break_style="bar_slash")
+        draw_bar = chart.bar if orientation == "vertical" else chart.barh
+        draw_bar([0, 1, 2], [2, 16, 7])
+        chart.figure.canvas.draw()
+        marks = next(artist for artist in chart.ax.artists if isinstance(artist, BreakMarks))
+        dx = chart.figure.dpi / 72 * 4 / chart.ax.bbox.width
+        dy = chart.figure.dpi / 72 * 4 / chart.ax.bbox.height
+        slashes = marks._bar_slashes(dx, dy)
+        assert len(slashes) == 3  # 16は両端、7は下側だけをまたぐ。
+        value = 1 if orientation == "vertical" else 0
+        boundaries = [slash[:, value].mean() for slash in slashes]
+        assert boundaries.count(pytest.approx(chart.ax.patch.bands[0][1])) == 2
+        assert boundaries.count(pytest.approx(chart.ax.patch.bands[1][0])) == 1
 
     def test_grouped_stacked_negative_and_multiple_breaks(self):
         """複数の省略区間とグループ化、積み上げ、負の値を確認する。"""

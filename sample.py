@@ -1,18 +1,22 @@
 # Copyright (c) 2026 magichan (https://github.com/magichan-lab)
 
-"""値軸を一部省略した縦棒グラフを作成して保存・表示する例。"""
+"""Matplotlib 統合形式で値軸を一部省略した縦棒グラフを作成する例。"""
 
-from matplotlib_omission import broken_bar
+import matplotlib.pyplot as plt
 
-chart = broken_bar(
+import matplotlib_omission
+
+matplotlib_omission.enable()
+
+fig, ax = plt.subplots(figsize=(7, 5))
+ax.bar(
     ["A", "B", "C", "D"],
     [1_900_000, 400_000, 16_000_000, 500_000],
-    y_ranges=[(0, 4_500_000), (13_500_000, 16_500_000)],
     color="#5b9bd5",
     width=0.55,
-    figsize=(7, 5),
 )
-chart.set_title("Sales")
-chart.grid(color="0.85")
-chart.savefig("vertical.png", dpi=160, bbox_inches="tight")
-chart.show()
+ax.set_ylim([(0, 4_500_000), (13_500_000, 16_500_000)])
+ax.set_title("Sales")
+ax.grid(axis="y", color="0.85")
+fig.savefig("vertical.png", dpi=160, bbox_inches="tight")
+plt.show()

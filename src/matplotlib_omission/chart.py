@@ -17,7 +17,11 @@ from ._marks import BreakMarks, OmissionPatch
 
 
 def _ranges(ranges):
-    """表示範囲を有限な昇順の区間列として検証し、タプルで返す。"""
+    """表示範囲を検証し、数値に変換した区間のタプルを返す。
+
+    区間は有限な下限と上限を持ち、昇順で互いに離れている必要がある。
+    不正な区間がある場合は ``ValueError`` を送出する。
+    """
     try:
         result = tuple(tuple(float(v) for v in interval) for interval in ranges)
     except (TypeError, ValueError) as exc:
@@ -36,7 +40,11 @@ def _ranges(ranges):
 
 
 def _piecewise(values, source, target):
-    """折れ線の節点間を線形補間し、両端の外側も延長して変換する。"""
+    """値を節点間で線形補間し、節点の外側では端の傾きで外挿する。
+
+    ``source`` と ``target`` は対応する節点の座標列とする。
+    変換した値を NumPy 配列で返す。
+    """
     values = np.asarray(values, dtype=float)
     result = np.interp(values, source, target)
     lower_slope = (target[1] - target[0]) / (source[1] - source[0])
@@ -58,8 +66,8 @@ class BrokenBarChart:
         省略記号のない通常のグラフを作る。
     orientation : {"vertical", "horizontal"}
         縦棒ではY軸、横棒ではX軸を省略する。
-    break_style : {"wave", "slash"}
-        各切断辺に波形、または両端に斜線を描く。
+    break_style : {"wave", "slash", "bar_slash"}
+        各切断辺に波形、値軸のみに斜線、または値軸と棒に斜線を描く。
     figsize : (幅, 高さ) または None
         新しい図のサイズ。単位はインチ。``ax`` 指定時は使用できない。
     ax : matplotlib.axes.Axes または None
@@ -103,8 +111,8 @@ class BrokenBarChart:
         self.ranges = _ranges(ranges)
         if orientation not in ("vertical", "horizontal"):
             raise ValueError("orientation must be 'vertical' or 'horizontal'")
-        if break_style not in ("wave", "slash"):
-            raise ValueError("break_style must be 'wave' or 'slash'")
+        if break_style not in ("wave", "slash", "bar_slash"):
+            raise ValueError("break_style must be 'wave', 'slash', or 'bar_slash'")
         for name, value, zero_ok in (
             ("gap", gap, True),
             ("amplitude", amplitude, True),
@@ -171,10 +179,22 @@ class BrokenBarChart:
             patch.set_edgecolor("none")
             patch.set_figure(self.figure)
             self.ax.patch = patch
+            # 軸範囲を設定する前に描いた系列にも省略区間のクリップを適用する。
+            for artist in (*self.ax.patches, *self.ax.collections, *self.ax.lines):
+                if artist is not patch and artist.get_clip_on() and artist.get_clip_path() is None:
+                    artist.set_clip_path(patch)
             self.ax.xaxis.set_clip_path(patch)
             self.ax.yaxis.set_clip_path(patch)
             self.ax.add_artist(
-                BreakMarks(self.ax, orientation, patch, break_style, break_color, break_linewidth)
+                BreakMarks(
+                    self.ax,
+                    orientation,
+                    patch,
+                    self.ranges,
+                    break_style,
+                    break_color,
+                    break_linewidth,
+                )
             )
             self.ax.spines["left" if vertical else "bottom"].set_visible(False)
         self.ax.spines["top"].set_visible(False)
@@ -183,9 +203,11 @@ class BrokenBarChart:
     def bar(self, x, height, width=0.8, bottom=None, **kwargs):
         """単一のAxesに縦棒の系列を描き、BarContainerのタプルを返す。
 
+        ``x`` は棒の位置、``height`` は棒の高さ、``width`` は棒の幅を指定する。
+        ``bottom`` は各棒の開始位置を指定し、積み上げに利用できる。
         追加のキーワード引数はMatplotlibの ``Axes.bar`` に渡す。
         グループ化には数値のX座標をずらして繰り返し呼び出す。
-        積み上げには ``bottom`` を指定する。
+        グラフが横向きの場合は ``ValueError`` を送出する。
         """
         if self.orientation != "vertical":
             raise ValueError("use barh() for a horizontal chart")
@@ -196,8 +218,11 @@ class BrokenBarChart:
     def barh(self, y, width, height=0.8, left=None, **kwargs):
         """単一のAxesに横棒の系列を描き、BarContainerのタプルを返す。
 
+        ``y`` は棒の位置、``width`` は棒の長さ、``height`` は棒の太さを指定する。
+        ``left`` は各棒の開始位置を指定し、積み上げに利用できる。
         追加のキーワード引数は ``Axes.barh`` に渡す。
-        グループ化には数値のY座標をずらし、積み上げには ``left`` を使う。
+        グループ化には数値のY座標をずらして繰り返し呼び出す。
+        グラフが縦向きの場合は ``ValueError`` を送出する。
         """
         if self.orientation != "horizontal":
             raise ValueError("use bar() for a vertical chart")
@@ -206,34 +231,57 @@ class BrokenBarChart:
         return result
 
     def grid(self, visible=True, *, axis=None, **kwargs):
-        """グリッド線を設定する。軸の省略時は値軸を使う。"""
+        """グリッド線を設定し、自身を返す。
+
+        ``visible`` で表示を切り替える。``axis`` の省略時は値軸を使い、
+        追加のキーワード引数は ``Axes.grid`` に渡す。
+        """
         axis = axis or ("y" if self.orientation == "vertical" else "x")
         self.ax.set_axisbelow(True)
         self.ax.grid(visible, axis=axis, **kwargs)
         return self
 
     def set_title(self, title, **kwargs):
-        """Axesのタイトルを設定し、作成したTextを返す。"""
+        """タイトルを設定し、作成した ``Text`` を返す。
+
+        追加のキーワード引数は ``Axes.set_title`` に渡す。
+        """
         return self.ax.set_title(title, **kwargs)
 
     def set_xlabel(self, label, **kwargs):
-        """AxesのX軸ラベルを設定し、作成したTextを返す。"""
+        """X軸ラベルを設定し、作成した ``Text`` を返す。
+
+        追加のキーワード引数は ``Axes.set_xlabel`` に渡す。
+        """
         return self.ax.set_xlabel(label, **kwargs)
 
     def set_ylabel(self, label, **kwargs):
-        """AxesのY軸ラベルを設定し、作成したTextを返す。"""
+        """Y軸ラベルを設定し、作成した ``Text`` を返す。
+
+        追加のキーワード引数は ``Axes.set_ylabel`` に渡す。
+        """
         return self.ax.set_ylabel(label, **kwargs)
 
     def legend(self, *args, **kwargs):
-        """Axesに凡例を描く。"""
+        """凡例を描き、作成した ``Legend`` を返す。
+
+        引数は ``Axes.legend`` に渡す。
+        """
         return self.ax.legend(*args, **kwargs)
 
     def savefig(self, filename, **kwargs):
-        """図を保存する。DPI、透過、ベクター形式などを指定できる。"""
+        """図をファイル名またはファイルオブジェクトに保存する。
+
+        ``filename`` は保存先を指定する。DPI、透過、出力形式などの
+        キーワード引数は ``Figure.savefig`` に渡す。
+        """
         return self.figure.savefig(filename, **kwargs)
 
     def show(self, **kwargs):
-        """Matplotlibの ``show`` を呼び出して図を表示する。"""
+        """Matplotlib の ``show`` を呼び出して図を表示する。
+
+        キーワード引数は ``pyplot.show`` に渡す。
+        """
         plt.show(**kwargs)
 
 
@@ -251,7 +299,11 @@ def broken_bar(
 ):
     """``y_ranges`` の区間間を省略した縦棒グラフを作成する。
 
+    ``x`` は棒の位置、``height`` は棒の高さを指定する。
+    ``y_ranges`` はY軸に表示する区間を昇順で指定する。
     ``ax`` には既存のAxesを指定できる。省略時は新しい図を作る。
+    ``break_style``、``figsize``、``gap``、``segment_ratios`` は
+    ``BrokenBarChart`` と同じ意味で使用する。
     ``bar_kwargs`` は色、棒の幅、基準値、誤差棒、凡例名などの指定として
     ``Axes.bar`` に渡す。詳細な設定には ``BrokenBarChart`` を使用する。
     作成した ``BrokenBarChart`` を返す。
@@ -282,7 +334,11 @@ def broken_barh(
 ):
     """``x_ranges`` の区間間を省略した横棒グラフを作成する。
 
+    ``y`` は棒の位置、``width`` は棒の長さを指定する。
+    ``x_ranges`` はX軸に表示する区間を昇順で指定する。
     ``ax`` には既存のAxesを指定できる。省略時は新しい図を作る。
+    ``break_style``、``figsize``、``gap``、``segment_ratios`` は
+    ``BrokenBarChart`` と同じ意味で使用する。
     ``bar_kwargs`` は ``Axes.barh`` に渡す。
     作成した ``BrokenBarChart`` を返す。
     """

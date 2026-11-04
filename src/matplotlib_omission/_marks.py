@@ -1,6 +1,6 @@
 # Copyright (c) 2026 magichan (https://github.com/magichan-lab)
 
-"""描画領域の切り抜きと省略記号に共通する境界線を定義する。"""
+"""単一の描画領域で省略区間を切り抜き、境界に省略記号を描く。"""
 
 import numpy as np
 from matplotlib.artist import Artist
@@ -10,18 +10,17 @@ from matplotlib.path import Path
 
 
 class OmissionPatch(PathPatch):
-    """省略位置に内向きの波形境界を持つ描画領域の背景兼クリップパス。
+    """表示区間だけを含む背景兼クリップパス。
 
-    描画領域のサイズまたは出力DPIが変わるとパスを再計算する。
-    描画領域のパッチをクリップに使うため、透過出力や誤差棒にも適用される。
+    波形の寸法はポイント単位で保持し、図のサイズやDPIの変更時に更新する。
     """
 
-    def __init__(self, ax, orientation, low_cut, high_cut, amplitude, wavelength):
-        """描画領域、切断位置、波形の寸法からパッチを初期化する。"""
+    def __init__(self, ax, orientation, bands, style, amplitude, wavelength):
+        """描画領域と正規化済みの表示区間からクリップパスを作る。"""
         self.owner = ax
         self.orientation = orientation
-        self.low_cut = low_cut
-        self.high_cut = high_cut
+        self.bands = tuple(bands)
+        self.style = style
         self.amplitude = amplitude
         self.wavelength = wavelength
         self._geometry_key = None
@@ -29,7 +28,7 @@ class OmissionPatch(PathPatch):
         super().__init__(Path.unit_rectangle(), transform=ax.transAxes)
 
     def get_path(self):
-        """現在の描画サイズに合わせて境界パスを更新して返す。"""
+        """現在の描画サイズに合わせて各表示区間の境界パスを返す。"""
         ax = self.owner
         key = (ax.bbox.width, ax.bbox.height, ax.figure.dpi)
         if key != self._geometry_key:
@@ -38,35 +37,51 @@ class OmissionPatch(PathPatch):
             along = ax.bbox.width if vertical else ax.bbox.height
             across = ax.bbox.height if vertical else ax.bbox.width
             points_to_pixels = ax.figure.dpi / 72
-            # サイズ変更後も非常に短いパネルを描画できるようにする。
-            amplitude = min(self.amplitude * points_to_pixels / max(across, 1), 0.12)
             cycles = max(along / (self.wavelength * points_to_pixels), 1)
             t = np.linspace(0, 1, max(80, int(cycles * 40)))
-            wave = amplitude * (1 - np.cos(2 * np.pi * cycles * t)) / 2
-            low = wave if self.low_cut else np.zeros_like(t)
-            high = 1 - wave if self.high_cut else np.ones_like(t)
-            bottom = np.column_stack((t, low))
-            top = np.column_stack((t, high))
-            if not vertical:
-                bottom = bottom[:, ::-1]
-                top = top[:, ::-1]
-            self.boundaries = {"low": bottom, "high": top}
-            vertices = np.vstack((bottom, top[::-1], bottom[:1]))
-            codes = np.full(len(vertices), Path.LINETO, dtype=np.uint8)
-            codes[0], codes[-1] = Path.MOVETO, Path.CLOSEPOLY
-            self.set_path(Path(vertices, codes))
+            waves = []
+            for (band_low, high), (low, band_high) in zip(self.bands, self.bands[1:]):
+                amplitude = min(
+                    self.amplitude * points_to_pixels / max(across, 1),
+                    (high - band_low) * 0.2,
+                    (band_high - low) * 0.2,
+                    (low - high) * 0.8,
+                )
+                waves.append(amplitude * (1 - np.cos(2 * np.pi * cycles * t)) / 2)
+            vertices, codes = [], []
+            self.boundaries = {}
+            for i, (low, high) in enumerate(self.bands):
+                lower = low + waves[i - 1] if self.style == "wave" and i else np.full_like(t, low)
+                upper = (
+                    high + waves[i]
+                    if self.style == "wave" and i < len(self.bands) - 1
+                    else np.full_like(t, high)
+                )
+                bottom = np.column_stack((t, lower))
+                top = np.column_stack((t, upper))
+                if not vertical:
+                    bottom = bottom[:, ::-1]
+                    top = top[:, ::-1]
+                self.boundaries[i, "low"] = bottom
+                self.boundaries[i, "high"] = top
+                segment = np.vstack((bottom, top[::-1], bottom[:1]))
+                segment_codes = np.full(len(segment), Path.LINETO, dtype=np.uint8)
+                segment_codes[0], segment_codes[-1] = Path.MOVETO, Path.CLOSEPOLY
+                vertices.append(segment)
+                codes.append(segment_codes)
+            self.set_path(Path(np.vstack(vertices), np.concatenate(codes)))
         return super().get_path()
 
 
 class BreakMarks(Artist):
-    """パネルの切断辺に波形または斜線の省略記号を描画する。"""
+    """表示区間の境界と値軸の枠線を描画する。"""
 
-    def __init__(self, ax, orientation, low_cut, high_cut, style, color, linewidth):
-        """描画領域と省略記号の表示条件・書式を設定する。"""
+    def __init__(self, ax, orientation, patch, style, color, linewidth):
+        """省略記号の描画領域、形状、線の書式を設定する。"""
         super().__init__()
         self.owner = ax
         self.orientation = orientation
-        self.cuts = {"low": low_cut, "high": high_cut}
+        self.patch = patch
         self.style = style
         self.color = color
         self.linewidth = linewidth
@@ -74,25 +89,32 @@ class BreakMarks(Artist):
         self.set_in_layout(False)
 
     def draw(self, renderer):
-        """有効な切断辺の省略記号を指定されたレンダラーで描画する。"""
+        """表示区間の枠線と省略境界の波形または斜線を描く。"""
         if not self.get_visible():
             return
         ax = self.owner
+        self.patch.get_path()
+        paths = []
+        for low, high in self.patch.bands:
+            if self.orientation == "vertical":
+                paths.append(np.array([[0, low], [0, high]]))
+            else:
+                paths.append(np.array([[low, 0], [high, 0]]))
         if self.style == "wave":
-            ax.patch.get_path()
-            paths = [ax.patch.boundaries[edge] for edge, cut in self.cuts.items() if cut]
+            for i in range(len(self.patch.bands) - 1):
+                paths.extend(
+                    (self.patch.boundaries[i, "high"], self.patch.boundaries[i + 1, "low"])
+                )
         else:
-            # 斜線の長さは描画領域のサイズに依存しないポイント単位で指定する。
             dx = renderer.points_to_pixels(4) / max(ax.bbox.width, 1)
             dy = renderer.points_to_pixels(4) / max(ax.bbox.height, 1)
-            paths = []
-            for edge, cut in self.cuts.items():
-                if not cut:
-                    continue
-                boundary = 0 if edge == "low" else 1
-                for end in (0, 1):
-                    x, y = (end, boundary) if self.orientation == "vertical" else (boundary, end)
-                    paths.append(np.array([[x - dx, y - dy], [x + dx, y + dy]]))
+            for i in range(len(self.patch.bands) - 1):
+                for boundary in (self.patch.bands[i][1], self.patch.bands[i + 1][0]):
+                    for end in (0, 1):
+                        x, y = (
+                            (end, boundary) if self.orientation == "vertical" else (boundary, end)
+                        )
+                        paths.append(np.array([[x - dx, y - dy], [x + dx, y + dy]]))
         for vertices in paths:
             line = Line2D(
                 vertices[:, 0],

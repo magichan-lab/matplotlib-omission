@@ -26,41 +26,64 @@ class TestBrokenBar:
     """縦棒・横棒グラフの表示範囲と省略表現を検証する。"""
 
     def test_vertical_limits_original_data_categories_and_common_scale(self):
-        """縦棒で元データ、カテゴリ、各パネルの共通縮尺を確認する。"""
+        """縦棒で元データ、カテゴリ、表示区間の共通縮尺を確認する。"""
         chart = broken_bar(["A", "B"], [2, 16], y_ranges=[(0, 4), (14, 17)])
         chart.figure.canvas.draw()
-        for ax, limits in zip(chart.axes, chart.ranges):
-            np.testing.assert_allclose(ax.get_ylim(), limits)
-            np.testing.assert_allclose([p.get_height() for p in ax.patches], [2, 16])
-        assert [t.get_text() for t in chart.axes[0].get_xticklabels()] == ["A", "B"]
-        np.testing.assert_allclose(chart.axes[0].get_xlim(), chart.axes[1].get_xlim())
-        pixels_per_value = [
-            ax.bbox.height / (hi - lo) for ax, (lo, hi) in zip(chart.axes, chart.ranges)
-        ]
-        assert pixels_per_value[0] == pytest.approx(pixels_per_value[1])
+        ax = chart.ax
+        assert chart.figure.axes == [ax]
+        np.testing.assert_allclose(ax.get_ylim(), (0, 17))
+        np.testing.assert_allclose([p.get_height() for p in ax.patches], [2, 16])
+        assert [t.get_text() for t in ax.get_xticklabels()] == ["A", "B"]
+        lower = ax.transData.transform((0, 2))[1] - ax.transData.transform((0, 1))[1]
+        upper = ax.transData.transform((0, 16))[1] - ax.transData.transform((0, 15))[1]
+        assert lower == pytest.approx(upper)
+        assert not any(4 < tick < 14 for tick in ax.get_yticks())
 
     def test_horizontal_limits_and_common_scale(self):
         """横棒で表示範囲と各パネルの共通縮尺を確認する。"""
         chart = broken_barh(["A", "B"], [3, 20], x_ranges=[(0, 5), (18, 22)])
         chart.figure.canvas.draw()
-        for ax, limits in zip(chart.axes, chart.ranges):
-            np.testing.assert_allclose(ax.get_xlim(), limits)
-            np.testing.assert_allclose([p.get_width() for p in ax.patches], [3, 20])
-        assert chart.axes[0].bbox.x0 < chart.axes[1].bbox.x0
-        assert chart.axes[0].bbox.width / 5 == pytest.approx(chart.axes[1].bbox.width / 4)
+        ax = chart.ax
+        assert chart.figure.axes == [ax]
+        np.testing.assert_allclose(ax.get_xlim(), (0, 22))
+        np.testing.assert_allclose([p.get_width() for p in ax.patches], [3, 20])
+        lower = ax.transData.transform((2, 0))[0] - ax.transData.transform((1, 0))[0]
+        upper = ax.transData.transform((20, 0))[0] - ax.transData.transform((19, 0))[0]
+        assert lower == pytest.approx(upper)
+        assert not any(5 < tick < 18 for tick in ax.get_xticks())
 
     def test_wave_clip_is_shared_with_bars_errorbars_and_grid(self):
         """波形のクリップが棒、誤差棒、グリッド線に共有されることを確認する。"""
         chart = broken_bar([0], [16], y_ranges=[(0, 4), (14, 17)], yerr=[0.5])
         chart.grid()
         chart.figure.canvas.draw()
-        for ax in chart.axes:
-            assert ax.patches[0].get_clip_path()._patch is ax.patch
-            assert ax.collections[0].get_clip_path()._patch is ax.patch
-            assert ax.get_ygridlines()[0].get_clip_path()._patch is ax.patch
-        path = chart.axes[0].patch.get_path()
-        assert not path.contains_point((0.5, 1.01))
-        assert path.contains_point((0.5, 0.5))
+        ax = chart.ax
+        assert ax.patches[0].get_clip_path()._patch is ax.patch
+        assert ax.collections[0].get_clip_path()._patch is ax.patch
+        assert ax.get_ygridlines()[0].get_clip_path()._patch is ax.patch
+        path = ax.patch.get_path()
+        gap = (ax.patch.bands[0][1] + ax.patch.bands[1][0]) / 2
+        assert not path.contains_point((0.5, gap))
+        assert path.contains_point((0.5, 0.2))
+
+    @pytest.mark.parametrize("orientation", ["vertical", "horizontal"])
+    @pytest.mark.parametrize("gap", [0.08, 0.001])
+    def test_wave_boundaries_are_parallel(self, orientation, gap):
+        """省略区間の両端が同じ波形になり、間隔が一定であることを確認する。"""
+        chart = BrokenBarChart(
+            [(0, 4), (14, 18), (28, 32)],
+            orientation=orientation,
+            gap=gap,
+            amplitude=12,
+        )
+        chart.figure.canvas.draw()
+        value = 1 if orientation == "vertical" else 0
+        for i in range(2):
+            upper = chart.ax.patch.boundaries[i, "high"][:, value]
+            lower = chart.ax.patch.boundaries[i + 1, "low"][:, value]
+            np.testing.assert_allclose(lower - upper, lower[0] - upper[0], atol=1e-12)
+            assert np.ptp(upper) > 0
+            np.testing.assert_allclose(upper - upper[0], lower - lower[0], atol=1e-12)
 
     def test_wave_pixels_are_cut_out_in_transparent_output(self):
         """透過画像で波形の外側だけが切り抜かれることを確認する。"""
@@ -74,13 +97,13 @@ class TestBrokenBar:
             )
             (chart.barh if horizontal else chart.bar)([0], [17], color="red")
             chart.figure.canvas.draw()
-            ax = chart.axes[0]
-            points = ax.patch.boundaries["high"]
-            # 棒のカテゴリ範囲にある最も深い谷を選ぶ。
+            ax = chart.ax
+            points = ax.patch.boundaries[0, "high"]
+            # 棒のカテゴリ範囲にある最も高い山を選ぶ。
             category = 1 if horizontal else 0
             value = 0 if horizontal else 1
             candidates = points[(points[:, category] > 0.3) & (points[:, category] < 0.7)]
-            edge = candidates[np.argmin(candidates[:, value])].copy()
+            edge = candidates[np.argmax(candidates[:, value])].copy()
             outside, inside = edge.copy(), edge.copy()
             # 表示画素上でアンチエイリアスされた境界線を避ける。
             distance = 6 / (ax.bbox.width if horizontal else ax.bbox.height)
@@ -107,8 +130,8 @@ class TestBrokenBar:
             chart.figure.set_size_inches(*size)
             chart.figure.set_dpi(dpi)
             chart.figure.canvas.draw()
-            ax = chart.axes[0]
-            amplitude = np.ptp(ax.patch.boundaries["high"][:, 1]) * ax.bbox.height / dpi * 72
+            ax = chart.ax
+            amplitude = np.ptp(ax.patch.boundaries[0, "high"][:, 1]) * ax.bbox.height / dpi * 72
             assert amplitude == pytest.approx(3, abs=0.02)
 
     def test_grouped_stacked_negative_and_multiple_breaks(self):
@@ -118,9 +141,8 @@ class TestBrokenBar:
         series = chart.bar([0, 1], [1, 3], bottom=[-8, 16], width=0.3, label="stack")
         for container in series:
             np.testing.assert_allclose([p.get_y() for p in container], [-8, 16])
-        colors = [ax.patches[2].get_facecolor() for ax in chart.axes]
-        assert colors[0] == colors[1]
-        assert colors[1] == colors[2]
+        assert len(chart.ax.patches) == 4
+        assert len(chart.figure.axes) == 1
         assert len(chart.legend().get_texts()) == 2
         chart.figure.canvas.draw()
 
@@ -140,16 +162,28 @@ class TestBrokenBar:
         assert any("." in t.get_text() for t in chart.axes[0].get_yticklabels())
 
     def test_custom_ratios_single_interval_and_orientation_guards(self):
-        """パネル比率、単一区間、方向に合わない棒の指定を確認する。"""
+        """表示区間比率、単一区間、方向に合わない棒の指定を確認する。"""
         chart = BrokenBarChart([(0, 4), (14, 17)], segment_ratios=[1, 1])
         chart.figure.canvas.draw()
-        assert chart.axes[0].bbox.height == pytest.approx(chart.axes[1].bbox.height)
+        bands = chart.ax.patch.bands
+        assert bands[0][1] - bands[0][0] == pytest.approx(bands[1][1] - bands[1][0])
         with pytest.raises(ValueError):
             chart.barh([0], [16])
         single = broken_barh([0], [2], x_ranges=[(0, 3)])
         assert len(single.axes) == 1
         with pytest.raises(ValueError):
             single.bar([0], [2])
+
+    def test_existing_subplot_grid_uses_one_axes_per_chart(self):
+        """既存の2×2配置に縦棒と横棒を各1つのAxesとして描く。"""
+        figure, axes = plt.subplots(2, 2)
+        vertical = broken_bar(["A"], [16], y_ranges=[(0, 4), (14, 17)], ax=axes[0, 0])
+        horizontal = broken_barh(["A"], [16], x_ranges=[(0, 4), (14, 17)], ax=axes[1, 1])
+        figure.canvas.draw()
+        assert len(figure.axes) == 4
+        assert vertical.ax is axes[0, 0]
+        assert horizontal.ax is axes[1, 1]
+        assert vertical.figure is horizontal.figure is figure
 
     def test_invalid_configuration_does_not_create_figures(self):
         """無効な設定では例外が発生し図が作成されないことを確認する。"""

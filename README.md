@@ -42,6 +42,8 @@ Example output:
 
 Use `gap` to adjust the space between the two break marks; smaller values bring them closer. It also works with `ax.set_ylim()` for vertical bars.
 
+Set `show_break_tick_labels=False` in `set_xlim()` or `set_ylim()` to hide the numbers at the break boundaries.
+
 Choose how the break appears with `break_style` (default: `wave`). For example, replace the `ax.set_xlim()` line above with:
 
 ```python

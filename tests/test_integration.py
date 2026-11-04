@@ -98,6 +98,28 @@ def test_step_without_omission_uses_regular_axes():
     fig.canvas.draw()
 
 
+@pytest.mark.parametrize("orientation", ["horizontal", "vertical"])
+@pytest.mark.parametrize("show_labels", [False, True])
+def test_break_boundary_tick_labels_can_be_toggled(orientation, show_labels):
+    """省略境界の数値だけを切り替え、目盛り位置と他のラベルを保つ。"""
+    matplotlib_omission.enable()
+    fig, ax = plt.subplots()
+    if orientation == "horizontal":
+        ax.barh([0], [16])
+        ax.set_xlim(0, 18, step=2, omit=(4, 14), show_break_tick_labels=show_labels)
+        axis = ax.xaxis
+    else:
+        ax.bar([0], [16])
+        ax.set_ylim(0, 18, step=2, omit=(4, 14), show_break_tick_labels=show_labels)
+        axis = ax.yaxis
+    fig.canvas.draw()
+    np.testing.assert_allclose(axis.get_ticklocs(), [0, 2, 4, 14, 16, 18])
+    labels = [axis.get_major_formatter()(value) for value in axis.get_ticklocs()]
+    assert bool(labels[2]) is show_labels
+    assert bool(labels[3]) is show_labels
+    assert all(labels[i] for i in (0, 1, 4, 5))
+
+
 def test_enabled_bar_slash_clips_bars_added_before_and_after_limits():
     """統合形式でも設定前後に描いた棒の塗りを斜めに切り抜く。"""
     matplotlib_omission.enable()

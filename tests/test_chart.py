@@ -238,6 +238,21 @@ class TestBrokenBar:
         chart.figure.canvas.draw()
         assert any("." in t.get_text() for t in chart.axes[0].get_yticklabels())
 
+    @pytest.mark.parametrize("orientation", ["horizontal", "vertical"])
+    def test_break_boundary_labels_hidden_with_multiple_omissions(self, orientation):
+        """作成関数でも複数の省略境界だけの数値を隠せる。"""
+        ranges = [(0, 4), (14, 18), (28, 32)]
+        if orientation == "horizontal":
+            chart = broken_barh([0], [30], x_ranges=ranges, show_break_tick_labels=False)
+            axis = chart.ax.xaxis
+        else:
+            chart = broken_bar([0], [30], y_ranges=ranges, show_break_tick_labels=False)
+            axis = chart.ax.yaxis
+        chart.figure.canvas.draw()
+        formatter = axis.get_major_formatter()
+        assert all(formatter(value) == "" for value in (4, 14, 18, 28))
+        assert formatter(0) and formatter(32)
+
     def test_custom_ratios_single_interval_and_orientation_guards(self):
         """表示区間比率、単一区間、方向に合わない棒の指定を確認する。"""
         chart = BrokenBarChart([(0, 4), (14, 17)], segment_ratios=[1, 1])
@@ -289,6 +304,7 @@ class TestBrokenBar:
             dict(segment_ratios=[1, -1]),
             dict(break_linewidth=float("nan")),
             dict(break_color="invalid"),
+            dict(show_break_tick_labels="false"),
         ]:
             with pytest.raises(ValueError):
                 BrokenBarChart([(0, 4), (14, 17)], **kwargs)

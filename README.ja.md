@@ -40,6 +40,8 @@ plt.show()
 
 切断記号の間隔は `gap` で調整できます。値を小さくすると間隔が狭くなり、縦棒グラフの `ax.set_ylim()` でも使えます。
 
+切断部分の両端の数値ラベルを隠すには、`set_xlim()` または `set_ylim()` に `show_break_tick_labels=False` を指定します。
+
 省略部分の表示は `break_style` で選べます（既定値は `wave`）。上の `ax.set_xlim()` の行を、例えば次のように変更します。
 
 ```python

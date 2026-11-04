@@ -20,6 +20,7 @@ _OPTIONS = {  # 省略区間の設定時に受け付ける追加オプション
     "wavelength",
     "break_color",
     "break_linewidth",
+    "show_break_tick_labels",
 }
 _enabled = False  # Matplotlib のメソッドを拡張済みかを示す。
 
@@ -88,7 +89,7 @@ def _wrap_limit(original, orientation):
         ``omit`` には複数の区間も指定できる。``step`` は目盛り間隔を指定する。
         省略軸には ``break_style``、``gap``、``segment_ratios``、
         ``amplitude``、``wavelength``、``break_color``、
-        ``break_linewidth`` を追加で指定できる。
+        ``break_linewidth``、``show_break_tick_labels`` を追加で指定できる。
         省略軸の再設定や不正な区間には ``ValueError`` を送出する。
         """
         omit = kwargs.pop("omit", None)

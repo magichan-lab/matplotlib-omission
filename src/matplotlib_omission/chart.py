@@ -6,7 +6,7 @@
 """
 
 from collections.abc import Sequence
-from math import isfinite
+from math import isclose, isfinite
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -56,6 +56,21 @@ def _piecewise(values, source, target):
     )
 
 
+class _BreakScalarFormatter(ScalarFormatter):
+    """省略区間の境界値だけを空文字にする数値目盛りフォーマッター。"""
+
+    def __init__(self, boundaries):
+        super().__init__(useOffset=False)
+        self.boundaries = boundaries
+
+    def __call__(self, value, pos=None):
+        if any(
+            isclose(value, boundary, rel_tol=1e-12, abs_tol=1e-12) for boundary in self.boundaries
+        ):
+            return ""
+        return super().__call__(value, pos)
+
+
 class BrokenBarChart:
     """単一の描画領域で値軸の一部を省略した棒グラフを作る。
 
@@ -83,6 +98,8 @@ class BrokenBarChart:
         省略記号の色。
     break_linewidth : float
         省略記号の線幅。
+    show_break_tick_labels : bool
+        省略区間の両端の数値ラベルを表示するか。既定値は True。
 
     補足
     ----
@@ -106,6 +123,7 @@ class BrokenBarChart:
         wavelength=36.0,
         break_color="0.25",
         break_linewidth=1.0,
+        show_break_tick_labels=True,
     ):
         """指定した表示区間と省略記号の設定で単一のAxesを構成する。"""
         self.ranges = _ranges(ranges)
@@ -113,6 +131,8 @@ class BrokenBarChart:
             raise ValueError("orientation must be 'vertical' or 'horizontal'")
         if break_style not in ("wave", "slash", "bar_slash"):
             raise ValueError("break_style must be 'wave', 'slash', or 'bar_slash'")
+        if not isinstance(show_break_tick_labels, bool):
+            raise ValueError("show_break_tick_labels must be a bool")
         for name, value, zero_ok in (
             ("gap", gap, True),
             ("amplitude", amplitude, True),
@@ -172,7 +192,17 @@ class BrokenBarChart:
             candidates = MaxNLocator(nbins=4, min_n_ticks=2).tick_values(low, high)
             ticks.extend(t for t in candidates if low <= t <= high)
         value_axis.set_major_locator(FixedLocator(sorted(set(ticks))))
-        value_axis.set_major_formatter(ScalarFormatter(useOffset=False))
+        boundaries = tuple(
+            boundary
+            for left, right in zip(self.ranges, self.ranges[1:])
+            for boundary in (left[1], right[0])
+        )
+        formatter = (
+            ScalarFormatter(useOffset=False)
+            if show_break_tick_labels
+            else _BreakScalarFormatter(boundaries)
+        )
+        value_axis.set_major_formatter(formatter)
         if n > 1:
             patch = OmissionPatch(
                 self.ax, orientation, bands, self.ranges, break_style, amplitude, wavelength
@@ -297,6 +327,7 @@ def broken_bar(
     ax=None,
     gap=0.08,
     segment_ratios=None,
+    show_break_tick_labels=True,
     **bar_kwargs,
 ):
     """``y_ranges`` の区間間を省略した縦棒グラフを作成する。
@@ -304,8 +335,8 @@ def broken_bar(
     ``x`` は棒の位置、``height`` は棒の高さを指定する。
     ``y_ranges`` はY軸に表示する区間を昇順で指定する。
     ``ax`` には既存のAxesを指定できる。省略時は新しい図を作る。
-    ``break_style``、``figsize``、``gap``、``segment_ratios`` は
-    ``BrokenBarChart`` と同じ意味で使用する。
+    ``break_style``、``figsize``、``gap``、``segment_ratios``、
+    ``show_break_tick_labels`` は ``BrokenBarChart`` と同じ意味で使用する。
     ``bar_kwargs`` は色、棒の幅、基準値、誤差棒、凡例名などの指定として
     ``Axes.bar`` に渡す。詳細な設定には ``BrokenBarChart`` を使用する。
     作成した ``BrokenBarChart`` を返す。
@@ -317,6 +348,7 @@ def broken_bar(
         ax=ax,
         gap=gap,
         segment_ratios=segment_ratios,
+        show_break_tick_labels=show_break_tick_labels,
     )
     chart.bar(x, height, **bar_kwargs)
     return chart
@@ -332,6 +364,7 @@ def broken_barh(
     ax=None,
     gap=0.08,
     segment_ratios=None,
+    show_break_tick_labels=True,
     **bar_kwargs,
 ):
     """``x_ranges`` の区間間を省略した横棒グラフを作成する。
@@ -339,8 +372,8 @@ def broken_barh(
     ``y`` は棒の位置、``width`` は棒の長さを指定する。
     ``x_ranges`` はX軸に表示する区間を昇順で指定する。
     ``ax`` には既存のAxesを指定できる。省略時は新しい図を作る。
-    ``break_style``、``figsize``、``gap``、``segment_ratios`` は
-    ``BrokenBarChart`` と同じ意味で使用する。
+    ``break_style``、``figsize``、``gap``、``segment_ratios``、
+    ``show_break_tick_labels`` は ``BrokenBarChart`` と同じ意味で使用する。
     ``bar_kwargs`` は ``Axes.barh`` に渡す。
     作成した ``BrokenBarChart`` を返す。
     """
@@ -352,6 +385,7 @@ def broken_barh(
         ax=ax,
         gap=gap,
         segment_ratios=segment_ratios,
+        show_break_tick_labels=show_break_tick_labels,
     )
     chart.barh(y, width, **bar_kwargs)
     return chart
